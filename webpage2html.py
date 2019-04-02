@@ -20,7 +20,7 @@ else:
     from urlparse import urlparse, urlunsplit, urljoin
     from urllib import quote
 
-re_css_url = re.compile('(url\(.*?\))')
+re_css_url = re.compile(r'(url\(.*?\))')
 webpage2html_cache = {}
 
 
@@ -49,7 +49,7 @@ def absurl(index, relpath=None, normpath=None):
             return index
 
 
-def get(index, relpath=None, verbose=True, usecache=True, verify=True, ignore_error=False):
+def get(index, relpath=None, verbose=True, usecache=True, verify=True, ignore_error=False, username=None, password=None):
     global webpage2html_cache
     if index.startswith('http') or (relpath and relpath.startswith('http')):
         full_path = absurl(index, relpath)
@@ -66,10 +66,15 @@ def get(index, relpath=None, verbose=True, usecache=True, verify=True, ignore_er
                     log('[ CACHE HIT ] - %s' % full_path)
                 return webpage2html_cache[full_path], None
         headers = {
-            'User-Agent': 'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Win64; x64; Trident/6.0)'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:65.0) Gecko/20100101 Firefox/65.0'
         }
+
+        auth = None
+        if username and password:
+            auth = requests.auth.HTTPBasicAuth(username, password)
+
         try:
-            response = requests.get(full_path, headers=headers, verify=verify)
+            response = requests.get(full_path, headers=headers, verify=verify, auth=auth)
             if verbose:
                 log('[ GET ] %d - %s' % (response.status_code, response.url))
             if not ignore_error and (response.status_code >= 400 or response.status_code < 200):
@@ -202,12 +207,13 @@ def handle_css_content(index, css, verbose=True):
 
 
 def generate(index, verbose=True, comment=True, keep_script=False, prettify=False, full_url=True, verify=True,
-             errorpage=False):
+             errorpage=False, username=None, password=None, **kwargs):
     """
     given a index url such as http://www.google.com, http://custom.domain/index.html
     return generated single html
     """
-    html_doc, extra_data = get(index, verbose=verbose, verify=verify, ignore_error=errorpage)
+    html_doc, extra_data = get(index, verbose=verbose, verify=verify, ignore_error=errorpage,
+                               username=username, password=password)
 
     if extra_data and extra_data.get('url'):
         index = extra_data['url']
@@ -256,9 +262,11 @@ def generate(index, verbose=True, comment=True, keep_script=False, prettify=Fals
         code = soup.new_tag('script', type=new_type)
         code['data-src'] = js['src']
         js_str, _ = get(index, relpath=js['src'], verbose=verbose)
+        if type(js_str) == bytes:
+            js_str = js_str.decode('utf-8')
         try:
             if js_str.find('</script>') > -1:
-                code['src'] = 'data:text/javascript;base64,' + base64.b64encode(js_str)
+                code['src'] = 'data:text/javascript;base64,' + base64.b64encode(js_str.encode()).decode()
             elif js_str.find(']]>') < 0:
                 code.string = '<!--//--><![CDATA[//><!--\n' + js_str + '\n//--><!]]>'
             else:
@@ -335,7 +343,7 @@ usage:
 options:
 
     -h, --help              help page, you are reading this now!
-    -q, --quite             don't show verbose url get log in stderr
+    -q, --quiet             don't show verbose url get log in stderr
     -s, --script            keep javascript in the generated html
 
 examples:
@@ -358,25 +366,26 @@ examples:
 def main():
     kwargs = {}
     parser = argparse.ArgumentParser()
-    parser.add_argument('-q', '--quite', action='store_true', help="don't show verbose url get log in stderr")
-    parser.add_argument('-s', '--script', action='store_true', help="keep javascript in the generated html ")
+    parser.add_argument('-q', '--quiet', action='store_true', help="don't show verbose url get log in stderr")
+    parser.add_argument('-s', '--script', action='store_true', help="keep javascript in the generated html")
     parser.add_argument('-k', '--insecure', action='store_true', help="ignore the certificate")
     parser.add_argument('-o', '--output', help="save output to")
+    parser.add_argument('-u', '--username', help="use HTTP basic auth with specified username")
+    parser.add_argument('-p', '--password', help="use HTTP basic auth with specified password")
     parser.add_argument('--errorpage', action='store_true', help="crawl an error page")
     parser.add_argument("url", help="the website to store")
     args = parser.parse_args()
-    if args.quite:
-        kwargs['verbose'] = False
-    if args.script:
-        kwargs['keep_script'] = True
-    if args.insecure:
-        kwargs['verify'] = False
-    if args.errorpage:
-        kwargs['errorpage'] = True
-    rs = generate(args.url, **kwargs)
+
+    args.verbose = not args.quiet
+    args.keep_script = args.script
+    args.verify = not args.insecure
+    args.index = args.url
+    kwargs = vars(args)
+
+    rs = generate(**kwargs)
     if args.output and args.output != '-':
         with open(args.output, 'wb') as f:
-            f.write(rs)
+            f.write(rs.encode())
     else:
         sys.stdout.write(rs)
 
